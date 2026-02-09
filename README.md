@@ -120,7 +120,7 @@ Download AVF: [PAL](https://drive.google.com/file/d/1xqwC5dUnTEuFpL4qeniVdj2TtK0
 
 | **Sample 1**                                  | **Sample 2**                                  |
 | ----------------------------------------------| --------------------------------------------- |
-| ![DAUBLG Example 1](images/avfplayer1.png) | ![DAUBLG Example 2](images/avfplayer1.png) |
+| ![DAUBLG Example 1](images/avfplayer1.png) | ![DAUBLG Example 2](images/avfplayer2.png) |
 
 ## Limitations
 
