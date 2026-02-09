@@ -14,7 +14,7 @@ A simple Python  AVF video file (Atari Video Format) player for modern computers
 
 - Real-time Phase/Saturation adjustment
 
-- CRT Scanline emulation
+- CRT (or rather player) scanline emulation
 
 - Horizontal Blending (Blur)
 
