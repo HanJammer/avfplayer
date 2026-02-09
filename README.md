@@ -124,7 +124,7 @@ Download AVF: [PAL](https://drive.google.com/file/d/1xqwC5dUnTEuFpL4qeniVdj2TtK0
 
 ## Limitations
 
-Don't expect the videos to have exactly the same colors as on original hardware. Built in are some basic controls for the Phase and Saturation but there will be some differences.
+Don't expect the videos to have the exactly same colors as on original hardware. For now this is the best effort approximation.
 
 ---
 
