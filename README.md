@@ -77,7 +77,7 @@ Then:
 Play video for PAL system:
 
 ```
-python avfplayer.py video-PAL.mp4 --system PAL
+python avfplayer.py video-PAL.mp4 PAL
 or
 python avfplayer.py video-PAL.mp4
 ```
@@ -85,7 +85,7 @@ python avfplayer.py video-PAL.mp4
 Play video for NTSC system:
 
 ```
-python avfplayer.py video-NTSC.mp4 --system NTSC
+python avfplayer.py video-NTSC.mp4 NTSC
 ```
 
 ## Parameters
@@ -108,7 +108,7 @@ usage: avfplayer.py [-h] [--scale SCALE] [--debug] file [system]
 | `S`                 | Enable/Disable scanlines. Default: Enabled.                                                                                                                                                      |
 | `B`                 | Enable/Disable pixel blending. Default: Enabled.                                                                                                                                                 |
 | `[`/`]`             | Tune color phase in 0.05 steps.                                                                                                                                                                  |
-| `Shift+[`/`Shift+]` | Scale of the video window (integer number, 3 is default, 8 fits 4k screen).                                                                                                                      |
+| `Shift+[`/`Shift+]` | Tune color saturation (integer number, 3 is default, 8 fits 4k screen).                                                                                                                          |
 | `L`                 | Loop video. Default: Disabled.                                                                                                                                                                   |
 | `D`                 | Show/Hide oscilloscope. Default: Disabled                                                                                                                                                        |
 
