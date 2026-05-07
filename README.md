@@ -4,7 +4,7 @@ A simple Python  AVF video file (Atari Video Format) player for modern computers
 ## Why use this tool?
 
 - To quickly check AVF files without need to launch real hardware.
-- To debug output of [avi2atari](https://github.com/HanJammer/avfplayer).
+- To debug output of [avi2atari](https://github.com/HanJammer/avi2atari).
 
 ### Key Features:
 
@@ -74,18 +74,18 @@ Then:
 
 ## Usage
 
-Play video for PAL system:
+Play an AVF file for PAL system:
 
 ```
-python avfplayer.py video-PAL.mp4 PAL
+python avfplayer.py video-PAL.avf PAL
 or
-python avfplayer.py video-PAL.mp4
+python avfplayer.py video-PAL.avf
 ```
 
-Play video for NTSC system:
+Play an AVF file for NTSC system:
 
 ```
-python avfplayer.py video-NTSC.mp4 NTSC
+python avfplayer.py video-NTSC.avf NTSC
 ```
 
 ## Parameters
