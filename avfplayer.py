@@ -35,6 +35,8 @@ import pygame.sndarray
 import numpy as np
 import math
 
+__version__ = "0.2"
+
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 160, 192
 FRAME_SIZE_BYTES = 8704
@@ -71,8 +73,11 @@ class AVFPlayer:
         pygame.display.set_caption(f"Python AVF Player | {os.path.basename(filename)}")
         
         # --- COLORS (GTIA) ---
-        self.phase_shift = 1.8      # Default Phase
-        self.saturation = 0.15      # Default Saturation
+        # The palette is the exact inverse of the avi2atari/phaeron encoder's
+        # colour model (see _generate_gtia_palette), so the neutral defaults
+        # below reproduce the source colours. Both stay live-tunable.
+        self.phase_shift = 0.0      # Hue rotation in radians (0 = encoder-exact)
+        self.saturation = 1.0       # Chroma gain (1.0 = Atari's amplitude of 40/255)
         self.palette = self._generate_gtia_palette()
         
         # --- DATA PROCESSING ---
@@ -88,44 +93,63 @@ class AVFPlayer:
         self.scanline_mask[1::2, :, :] = 0.6 # Darken factor (0.0=Black, 1.0=Transparent)
 
     def _generate_gtia_palette(self):
-        # Generates a full 256-color Atari palette (16 Hue * 16 Luma) 
-        # based on the YIQ/YUV color model used in emulators.
+        # Generates the 256-color palette (16 Hue * 16 Luma) as the EXACT
+        # inverse of the encoder's colour model (avi2atari.py / phaeron's
+        # encvideo50n/60n C++ sources).
+        #
+        # The encoder works in YIQ, not YUV: it computes
+        #   fi = 0.595 R' - 0.274 G' - 0.321 B'   (the I axis)
+        #   fq = 0.211 R' - 0.522 G' + 0.311 B'   (the Q axis)
+        # and quantises every saturated pixel to a hue index whose I/Q
+        # coordinates are:
+        #   PAL : 14 hues, ITAB[c] = 40*cos(pi*(c-0.5)/7),  c = 1..14
+        #   NTSC: 15 hues, ITAB[c] = 40*cos(pi*(c-1)/7.5),  c = 1..15
+        # with chroma amplitude fixed at exactly 40 (out of 255) and
+        # luma = nibble * 17. Decoding is therefore: rebuild I/Q from the
+        # hue index, then apply the standard YIQ->RGB matrix.
+        #
+        # NTSC quirk: the encoder's hue *selection* (atan2*(7.5/pi) + 2.0)
+        # emits indices shifted +2 steps relative to its own ITAB/QTAB
+        # tables, so we subtract 2 steps (-48 degrees) when decoding.
+        # Confirmed numerically: a round-trip grid search over the RGB cube
+        # puts the error optimum at exactly -2 hue steps.
+        #
+        # phase_shift rotates the whole colour wheel (radians, 0 = neutral),
+        # saturation scales chroma amplitude (1.0 = the Atari's 40/255;
+        # ~2.0 approximates the punchier look of the original source).
         palette = np.zeros((256, 3), dtype=np.uint8)
-        
-        # 1. Grayscale (Chroma=0) - independent of phase
-        for luma in range(16):
-            val = int((luma / 15.0) * 255)
-            palette[luma] = [val, val, val]
-        
-        # 2. Colors (Chroma 1-15)
-        for chroma in range(1, 16):
+        amp = 40.0 * self.saturation
+
+        for chroma in range(16):
+            if chroma == 0:
+                # Grayscale row - no chroma
+                i_val = 0.0
+                q_val = 0.0
+            else:
+                if self.is_pal:
+                    angle = math.pi * (chroma - 0.5) / 7.0
+                else:
+                    angle = math.pi * (chroma - 1 - 2) / 7.5
+                angle += self.phase_shift
+                i_val = amp * math.cos(angle)
+                q_val = amp * math.sin(angle)
+
             for luma in range(16):
-                # Atari Hue Angle
-                angle = (chroma - 1) * (2 * math.pi / 15.0) + self.phase_shift
-                
-                # Brightness (Luma)
-                y = (luma / 15.0)
-                
-                # Color (Chroma)
-                sat = self.saturation * 0.5 
-                u = sat * math.cos(angle)
-                v = sat * math.sin(angle)
-                
-                # YUV -> RGB Conversion
-                r = y + 1.140 * v
-                g = y - 0.395 * u - 0.581 * v
-                b = y + 2.032 * u
-                
-                rgb = [
-                    max(0, min(255, int(r * 255))),
-                    max(0, min(255, int(g * 255))),
-                    max(0, min(255, int(b * 255)))
-                ]
-                
+                y = luma * 17.0
+
+                # YIQ -> RGB (standard matrix)
+                r = y + 0.9563 * i_val + 0.6210 * q_val
+                g = y - 0.2721 * i_val - 0.6474 * q_val
+                b = y - 1.1070 * i_val + 1.7046 * q_val
+
                 # Index: HighNibble=Chroma, LowNibble=Luma
                 idx = (chroma << 4) | luma
-                palette[idx] = rgb
-                
+                palette[idx] = [
+                    max(0, min(255, int(round(r)))),
+                    max(0, min(255, int(round(g)))),
+                    max(0, min(255, int(round(b))))
+                ]
+
         return palette
 
     def _decode_frame_gtia(self, luma_block, chroma_block):
@@ -347,6 +371,7 @@ if __name__ == "__main__":
     parser.add_argument("system", nargs="?", default="PAL", help="TV System (PAL/NTSC), default PAL")
     parser.add_argument("--scale", type=int, default=3, help="Window scale factor (default 3)")
     parser.add_argument("--debug", action="store_true", help="Enable debug overlay")
+    parser.add_argument("--version", action="version", version=f"avfplayer {__version__}")
     
     args = parser.parse_args()
     if os.path.exists(args.file): 

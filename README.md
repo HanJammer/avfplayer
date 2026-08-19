@@ -107,8 +107,8 @@ usage: avfplayer.py [-h] [--scale SCALE] [--debug] file [system]
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `S`                 | Enable/Disable scanlines. Default: Enabled.                                                                                                                                                      |
 | `B`                 | Enable/Disable pixel blending. Default: Enabled.                                                                                                                                                 |
-| `[`/`]`             | Tune color phase in 0.05 steps.                                                                                                                                                                  |
-| `Shift+[`/`Shift+]` | Tune color saturation (integer number, 3 is default, 8 fits 4k screen).                                                                                                                          |
+| `[`/`]`             | Tune color phase (hue rotation) in 0.05 rad steps. Default: `0.00` = encoder-exact hues.                                                                                                         |
+| `Shift+[`/`Shift+]` | Tune color saturation (chroma gain) in 0.05 steps. Default: `1.00` = the Atari's own chroma amplitude; try `~2.0` for source-like punch.                                                          |
 | `L`                 | Loop video. Default: Disabled.                                                                                                                                                                   |
 | `D`                 | Show/Hide oscilloscope. Default: Disabled                                                                                                                                                        |
 
@@ -122,9 +122,22 @@ Download AVF: [PAL](https://drive.google.com/file/d/1xqwC5dUnTEuFpL4qeniVdj2TtK0
 | ----------------------------------------------| --------------------------------------------- |
 | ![DAUBLG Example 1](images/avfplayer1.png) | ![DAUBLG Example 2](images/avfplayer2.png) |
 
+## Color model
+
+The palette is derived as the exact mathematical inverse of the
+[avi2atari](https://github.com/HanJammer/avi2atari)/phaeron encoder model: the
+encoder quantises colors in **YIQ** space to 14 (PAL) or 15 (NTSC) hue angles
+with a fixed chroma amplitude of 40/255 and 16 luma levels (`luma * 17`), and
+the player rebuilds RGB from precisely those coordinates. At the default
+settings (`Phase 0.00`, `Sat 1.00`) the displayed colors are what the encoder
+"meant", i.e. its best approximation of the source video.
+
 ## Limitations
 
-Don't expect the videos to have the exactly same colors as on original hardware. For now this is the best effort approximation.
+Real GTIA hue phases are analog and drift with hardware revision, temperature
+and the TV/monitor, so colors on a real Atari will never match any fixed
+palette exactly. Use `[`/`]` (phase) and `Shift+[`/`]` (saturation) to match
+your reference hardware by eye.
 
 ---
 
