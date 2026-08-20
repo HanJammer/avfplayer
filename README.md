@@ -97,7 +97,9 @@ usage: avfplayer.py [-h] [--scale SCALE] [--debug] file [system]
 | **Parameter**  | **Description**                                                                                                                                                                                       |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `file`         | Input AVF file                                                                                                                                                                                        |
-| `system`       | Target system: `PAL` or `NTSC`. Default: `PAL`.                                                                                                                                                       |
+| `system`       | Target system: `PAL` or `NTSC`. Default: read from the AVF2 header if present, otherwise `PAL`.                                                                                                       |
+| `--info`       | Print AVF2 metadata (title, author, converter, duration, poster) and exit.                                                                                                                            |
+| `--poster`     | Show the AVF2 poster frame before playback (any key starts; the tuning keys work there too).                                                                                                          |
 | `--debug`      | Enables debug overlay (currently shows oscilloscope).                                                                                                                                                 |
 | `--scale`      | Scale of the video window (integer number, 3 is default, 8 fits 4k screen).                                                                                                                           |
 

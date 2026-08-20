@@ -35,15 +35,54 @@ import pygame.sndarray
 import numpy as np
 import math
 
-__version__ = "0.2"
+__version__ = "0.3"
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 160, 192
 FRAME_SIZE_BYTES = 8704
 HEADER_SIZE = 8192
 
+
+def parse_avf2(path):
+    """Parse the AVF2 metadata header if present.
+
+    Returns (meta dict, poster bytes or None); (None, None) when the file is
+    plain AVF v1, header-less, or the AVF2 block is corrupt. Layout:
+    avi2atari's docs/AVF2_HEADER.md. AVF2 files remain fully playable as v1.
+    """
+    size = os.path.getsize(path)
+    if size % FRAME_SIZE_BYTES == 0:
+        return None, None  # header-less file
+    with open(path, "rb") as f:
+        buf = f.read(HEADER_SIZE)
+    if len(buf) < HEADER_SIZE or buf[:4] != b"AVF2":
+        return None, None
+    s0 = buf[:512]
+    if int.from_bytes(s0[510:512], "little") != (sum(s0[:510]) & 0xFFFF):
+        print("[!] AVF2 magic found but checksum is invalid - ignoring metadata.")
+        return None, None
+
+    def text(lo, hi):
+        raw = s0[lo:hi].rstrip(b"\x00")
+        return "".join(chr(b) if 0x20 <= b <= 0x7E else "?" for b in raw)
+
+    meta = {
+        "version": s0[4],
+        "system": "PAL" if s0[5] == 0 else "NTSC",
+        "frame_count": int.from_bytes(s0[8:12], "little"),
+        "duration_ms": int.from_bytes(s0[12:16], "little"),
+        "date": text(16, 24),
+        "title": text(64, 128),
+        "author": text(128, 192),
+        "converter": text(192, 224),
+        "comment": text(224, 352),
+    }
+    poster = buf[512:HEADER_SIZE] if (s0[6] & 1) else None
+    return meta, poster
+
 class AVFPlayer:
-    def __init__(self, filename, system='PAL', scale=3, debug=False):
+    def __init__(self, filename, system='PAL', scale=3, debug=False,
+                 meta=None, poster=None, show_poster=False):
         # 1. AUDIO INITIALIZATION
         # We request 44.1kHz Stereo, but we must accept what the OS gives us.
         pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
@@ -57,8 +96,17 @@ class AVFPlayer:
         self.is_pal = (self.system == 'PAL')
         self.fps = 49.86 if self.is_pal else 59.92
         self.debug_mode = debug
-        self.filename = filename 
+        self.filename = filename
         self.looping = False
+
+        # --- AVF2 METADATA (optional) ---
+        self.meta = meta
+        self.poster = poster
+        self.show_poster = show_poster
+        if meta:
+            print(f"[*] AVF2: '{meta['title']}' by {meta['author'] or '?'} "
+                  f"({meta['system']}, {meta['duration_ms']/1000.0:.1f}s, "
+                  f"{meta['converter']})")
         
         # --- CRT EFFECTS ---
         self.show_scanlines = True
@@ -70,7 +118,11 @@ class AVFPlayer:
         self.window_w = WIDTH * self.scale_x
         self.window_h = HEIGHT * self.scale_y
         self.screen = pygame.display.set_mode((self.window_w, self.window_h))
-        pygame.display.set_caption(f"Python AVF Player | {os.path.basename(filename)}")
+        if meta and meta.get("title"):
+            caption = meta["title"] + (f" - {meta['author']}" if meta.get("author") else "")
+        else:
+            caption = os.path.basename(filename)
+        pygame.display.set_caption(f"Python AVF Player | {caption}")
         
         # --- COLORS (GTIA) ---
         # The palette is the exact inverse of the avi2atari/phaeron encoder's
@@ -236,7 +288,79 @@ class AVFPlayer:
         
         return video_frames, snd, viz
 
+    def _blit_frame(self, vf):
+        # Full render pipeline for one 192x40 frame (video or AVF2 poster):
+        # line split, nibble unpack, palette decode, upscale, blend, scanlines.
+        chroma_line = (vf[0::2] if self.is_pal else vf[1::2])
+        luma_line   = (vf[1::2] if self.is_pal else vf[0::2])
+
+        h_proc = min(len(chroma_line), len(luma_line))
+
+        # Unpack nibbles (96 lines, 80 bytes -> 160 pixels)
+        c_unp = np.stack([(chroma_line[:h_proc]>>4)&0xF, chroma_line[:h_proc]&0xF], axis=-1).reshape(h_proc, 80)
+        l_unp = np.stack([(luma_line[:h_proc]>>4)&0xF, luma_line[:h_proc]&0xF], axis=-1).reshape(h_proc, 80)
+
+        # 1. Base RGB Decoding (96 x 80)
+        rgb_base = self._decode_frame_gtia(l_unp, c_unp).astype(np.float32)
+
+        # Scale horizontally x2 (96 x 160)
+        rgb_wide = np.repeat(rgb_base, 2, axis=1)
+
+        # 2. Horizontal Blending (Blur)
+        if self.enable_blending:
+            blended = np.zeros_like(rgb_wide)
+            blended[:, 1:] = (rgb_wide[:, 1:] + rgb_wide[:, :-1]) * 0.5
+            blended[:, 0] = rgb_wide[:, 0]
+            rgb_wide = blended
+
+        # Scale vertically x2 (192 x 160)
+        rgb_192 = np.repeat(rgb_wide, 2, axis=0)
+
+        # 3. Scanlines (Vertical lines)
+        if self.show_scanlines:
+            rgb_192 = (rgb_192 * self.scanline_mask).astype(np.uint8)
+        else:
+            rgb_192 = rgb_192.astype(np.uint8)
+
+        # Blit to screen
+        surf = pygame.surfarray.make_surface(rgb_192.swapaxes(0, 1))
+        self.screen.blit(pygame.transform.scale(surf, (self.window_w, self.window_h)), (0,0))
+
+    def _show_poster(self):
+        # Static AVF2 poster view; any key starts playback, ESC quits.
+        # S/B and the phase/saturation keys work here too, so the poster
+        # doubles as a colour-tuning screen.
+        vf = np.frombuffer(self.poster, dtype=np.uint8).reshape(HEIGHT, 40)
+        while True:
+            self._blit_frame(vf)
+            lbl = self.font.render(
+                "AVF2 POSTER - any key: play | ESC: quit | S/B/[/] tune", True, (255,255,0))
+            self.screen.blit(lbl, (10, 10))
+            pygame.display.flip()
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_ESCAPE:
+                        pygame.quit(); sys.exit(0)
+                    mods = pygame.key.get_mods()
+                    if e.key == pygame.K_s: self.show_scanlines = not self.show_scanlines
+                    elif e.key == pygame.K_b: self.enable_blending = not self.enable_blending
+                    elif e.key == pygame.K_RIGHTBRACKET and (mods & pygame.KMOD_SHIFT):
+                        self.saturation = min(2.0, self.saturation + 0.05); self.palette = self._generate_gtia_palette()
+                    elif e.key == pygame.K_LEFTBRACKET and (mods & pygame.KMOD_SHIFT):
+                        self.saturation = max(0.0, self.saturation - 0.05); self.palette = self._generate_gtia_palette()
+                    elif e.key == pygame.K_RIGHTBRACKET:
+                        self.phase_shift += 0.05; self.palette = self._generate_gtia_palette()
+                    elif e.key == pygame.K_LEFTBRACKET:
+                        self.phase_shift -= 0.05; self.palette = self._generate_gtia_palette()
+                    else:
+                        return
+            self.clock.tick(30)
+
     def run(self):
+        if self.show_poster and self.poster is not None:
+            self._show_poster()
         print("[*] PLAYER STARTED. Controls:")
         print("    [ S ]          Scanlines (Toggle)")
         print("    [ B ]          Blending (Toggle)")
@@ -295,43 +419,7 @@ class AVFPlayer:
                 if paused: self.clock.tick(10); continue
 
                 # --- RENDER PIPELINE ---
-                vf = self.video_frames[f_idx]
-                
-                # Split interleaved Luma/Chroma lines
-                chroma_line = (vf[0::2] if self.is_pal else vf[1::2]) 
-                luma_line   = (vf[1::2] if self.is_pal else vf[0::2])
-                
-                h_proc = min(len(chroma_line), len(luma_line))
-                
-                # Unpack nibbles (96 lines, 80 bytes -> 160 pixels)
-                c_unp = np.stack([(chroma_line[:h_proc]>>4)&0xF, chroma_line[:h_proc]&0xF], axis=-1).reshape(h_proc, 80)
-                l_unp = np.stack([(luma_line[:h_proc]>>4)&0xF, luma_line[:h_proc]&0xF], axis=-1).reshape(h_proc, 80)
-                
-                # 1. Base RGB Decoding (96 x 80)
-                rgb_base = self._decode_frame_gtia(l_unp, c_unp).astype(np.float32)
-                
-                # Scale horizontally x2 (96 x 160)
-                rgb_wide = np.repeat(rgb_base, 2, axis=1)
-
-                # 2. Horizontal Blending (Blur)
-                if self.enable_blending:
-                    blended = np.zeros_like(rgb_wide)
-                    blended[:, 1:] = (rgb_wide[:, 1:] + rgb_wide[:, :-1]) * 0.5
-                    blended[:, 0] = rgb_wide[:, 0]
-                    rgb_wide = blended
-
-                # Scale vertically x2 (192 x 160)
-                rgb_192 = np.repeat(rgb_wide, 2, axis=0)
-                
-                # 3. Scanlines (Vertical lines)
-                if self.show_scanlines:
-                    rgb_192 = (rgb_192 * self.scanline_mask).astype(np.uint8)
-                else:
-                    rgb_192 = rgb_192.astype(np.uint8)
-
-                # Blit to screen
-                surf = pygame.surfarray.make_surface(rgb_192.swapaxes(0, 1))
-                self.screen.blit(pygame.transform.scale(surf, (self.window_w, self.window_h)), (0,0))
+                self._blit_frame(self.video_frames[f_idx])
 
                 # GUI Overlays
                 if self.debug_mode: self._draw_oscilloscope(ticks)
@@ -368,13 +456,43 @@ class AVFPlayer:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AVF Video Player")
     parser.add_argument("file", help="Input AVF file")
-    parser.add_argument("system", nargs="?", default="PAL", help="TV System (PAL/NTSC), default PAL")
+    parser.add_argument("system", nargs="?", default=None,
+                        help="TV System (PAL/NTSC). Default: from the AVF2 header "
+                             "if present, otherwise PAL")
     parser.add_argument("--scale", type=int, default=3, help="Window scale factor (default 3)")
     parser.add_argument("--debug", action="store_true", help="Enable debug overlay")
+    parser.add_argument("--info", action="store_true",
+                        help="Print AVF2 metadata (if any) and exit without playing")
+    parser.add_argument("--poster", action="store_true",
+                        help="Show the AVF2 poster frame before playback (any key starts)")
     parser.add_argument("--version", action="version", version=f"avfplayer {__version__}")
-    
+
     args = parser.parse_args()
-    if os.path.exists(args.file): 
-        AVFPlayer(args.file, args.system, args.scale, args.debug).run()
-    else: 
+    if not os.path.exists(args.file):
         print("Error: File not found.")
+        sys.exit(2)
+
+    meta, poster = parse_avf2(args.file)
+
+    if args.info:
+        if meta is None:
+            print(f"{args.file}: no AVF2 metadata (plain AVF v1 or header-less file)")
+        else:
+            print(f"{args.file}: AVF2 v{meta['version']}")
+            print(f"  System:    {meta['system']}")
+            print(f"  Frames:    {meta['frame_count']}  ({meta['duration_ms']/1000.0:.1f}s)")
+            print(f"  Date:      {meta['date']}")
+            print(f"  Title:     {meta['title']}")
+            print(f"  Author:    {meta['author']}")
+            print(f"  Converter: {meta['converter']}")
+            print(f"  Comment:   {meta['comment']}")
+            print(f"  Poster:    {'yes' if poster is not None else 'no'}")
+        sys.exit(0)
+
+    system = args.system or (meta["system"] if meta else "PAL")
+    if meta and args.system and args.system.upper() != meta["system"]:
+        print(f"[!] Requested {args.system.upper()} but the AVF2 header says "
+              f"{meta['system']} - using {args.system.upper()} as requested.")
+
+    AVFPlayer(args.file, system, args.scale, args.debug,
+              meta=meta, poster=poster, show_poster=args.poster).run()
