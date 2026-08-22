@@ -35,7 +35,7 @@ import pygame.sndarray
 import numpy as np
 import math
 
-__version__ = "0.3"
+__version__ = "0.4"
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 160, 192
@@ -76,6 +76,8 @@ def parse_avf2(path):
         "author": text(128, 192),
         "converter": text(192, 224),
         "comment": text(224, 352),
+        "profile": s0[7],
+        "profile_name": {0: "APAC", 1: "C80M3", 2: "C80M4"}.get(s0[7], f"?{s0[7]}"),
     }
     poster = buf[512:HEADER_SIZE] if (s0[6] & 1) else None
     return meta, poster
@@ -103,10 +105,11 @@ class AVFPlayer:
         self.meta = meta
         self.poster = poster
         self.show_poster = show_poster
+        self.profile = meta["profile"] if meta else 0
         if meta:
             print(f"[*] AVF2: '{meta['title']}' by {meta['author'] or '?'} "
                   f"({meta['system']}, {meta['duration_ms']/1000.0:.1f}s, "
-                  f"{meta['converter']})")
+                  f"{meta['profile_name']}, {meta['converter']})")
         
         # --- CRT EFFECTS ---
         self.show_scanlines = True
@@ -288,9 +291,31 @@ class AVFPlayer:
         
         return video_frames, snd, viz
 
+    def _blit_frame_c80(self, vf):
+        # AVF-C80 M4 profile: 24 cell rows x [chars|R|G|B] planes of 40+40
+        # bytes each; every RGB byte packs BG in the high nibble (top pixel)
+        # and FG in the low nibble (bottom pixel) -> an 80x48 RGB444 image.
+        a = vf.reshape(24, 8, 40)
+        Rb = a[:, 2:4, :].reshape(24, 80).astype(np.int32)
+        Gb = a[:, 4:6, :].reshape(24, 80).astype(np.int32)
+        Bb = a[:, 6:8, :].reshape(24, 80).astype(np.int32)
+        rgb = np.zeros((48, 80, 3), dtype=np.float32)
+        rgb[0::2, :, 0] = (Rb >> 4) * 17;  rgb[1::2, :, 0] = (Rb & 15) * 17
+        rgb[0::2, :, 1] = (Gb >> 4) * 17;  rgb[1::2, :, 1] = (Gb & 15) * 17
+        rgb[0::2, :, 2] = (Bb >> 4) * 17;  rgb[1::2, :, 2] = (Bb & 15) * 17
+        rgb_192 = np.repeat(np.repeat(rgb, 4, axis=0), 2, axis=1)
+        if self.show_scanlines:
+            rgb_192 = (rgb_192 * self.scanline_mask).astype(np.uint8)
+        else:
+            rgb_192 = rgb_192.astype(np.uint8)
+        surf = pygame.surfarray.make_surface(rgb_192.swapaxes(0, 1))
+        self.screen.blit(pygame.transform.scale(surf, (self.window_w, self.window_h)), (0, 0))
+
     def _blit_frame(self, vf):
         # Full render pipeline for one 192x40 frame (video or AVF2 poster):
         # line split, nibble unpack, palette decode, upscale, blend, scanlines.
+        if self.profile == 2:
+            return self._blit_frame_c80(vf)
         chroma_line = (vf[0::2] if self.is_pal else vf[1::2])
         luma_line   = (vf[1::2] if self.is_pal else vf[0::2])
 
