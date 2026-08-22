@@ -35,7 +35,7 @@ import pygame.sndarray
 import numpy as np
 import math
 
-__version__ = "0.4"
+__version__ = "0.5"
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 160, 192
@@ -213,13 +213,15 @@ class AVFPlayer:
         return self.palette[indices]
 
     def _load_process_full(self):
-        # 1. READ FILE
+        # 1. READ FILE. C80 profiles use 8192-byte frames (7680 raw video +
+        # 512 linear audio); APAC keeps the classic 8704-byte mux.
+        frame_size = 8192 if self.profile == 2 else FRAME_SIZE_BYTES
         size = os.path.getsize(self.filename)
         with open(self.filename, "rb") as f:
-            if size % FRAME_SIZE_BYTES != 0: f.seek(HEADER_SIZE)
+            if size % frame_size != 0: f.seek(HEADER_SIZE)
             raw = f.read()
 
-        num_frames = len(raw) // FRAME_SIZE_BYTES
+        num_frames = len(raw) // frame_size
         video_frames = []
         audio_chunks = []
         
@@ -228,9 +230,17 @@ class AVFPlayer:
         
         # 2. DEMUX LOOP
         for i in range(num_frames):
-            base = i * FRAME_SIZE_BYTES
-            chunk = raw[base : base+FRAME_SIZE_BYTES]
-            
+            base = i * frame_size
+            chunk = raw[base : base+frame_size]
+
+            if self.profile == 2:
+                # C80: raw video, then the audio chunk linearly
+                v = np.frombuffer(chunk[:7680], dtype=np.uint8).reshape(HEIGHT, 40)
+                video_frames.append(v)
+                ac = np.frombuffer(chunk[7680:7680+audio_len], dtype=np.uint8).copy()
+                audio_chunks.append(ac)
+                continue
+
             # --- Video extraction ---
             v = np.zeros((HEIGHT, 40), dtype=np.uint8)
             for b in range(64):
